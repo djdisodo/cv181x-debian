@@ -1,0 +1,3 @@
+# Installed by the distro packager image builder.
+# Uses the vendored repository signing key from /usr/share/keyrings/sodo-repo.gpg.
+deb [signed-by=/usr/share/keyrings/sodo-repo.gpg] http://sodorepo.dpdns.org/debian stable main

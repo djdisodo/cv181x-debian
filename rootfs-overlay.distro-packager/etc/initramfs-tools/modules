@@ -1,0 +1,3 @@
+# Installed by the distro packager image builder.
+# Keep this list minimal. The MMC and SDHCI stack is built into the kernel.
+btrfs
