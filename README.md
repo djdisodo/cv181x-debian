@@ -36,9 +36,8 @@ set -euo pipefail
 RECIPE_DIR=$PWD
 IMG=$PWD/sg2002-duo256m-debian.img
 ROOT_MNT=$PWD/mnt-root
-BOOT_SEED=$PWD/boot-seed
 
-install -d "$ROOT_MNT" "$BOOT_SEED"
+install -d "$ROOT_MNT"
 
 # Make the vendored Sodo repo key visible to host-side apt during bootstrap.
 install -Dm0644 \
@@ -56,9 +55,12 @@ mkfs.vfat -F 32 -n BOOT "${LOOP}p1"
 mkfs.btrfs -L rootfs -f "${LOOP}p2"
 
 mount "${LOOP}p2" "$ROOT_MNT"
+install -d "$ROOT_MNT/boot"
+mount "${LOOP}p1" "$ROOT_MNT/boot"
 
 mmdebstrap \
   --mode=root \
+  --skip=check/empty \
   --architectures=riscv64 \
   --variant=minbase \
   --include='systemd-sysv,network-manager,netbase,kmod,btrfs-progs,ca-certificates,firmware-realtek,linux-image-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
@@ -74,15 +76,9 @@ mmdebstrap \
 # Set the root password inside the foreign-arch rootfs without PAM.
 printf 'root:CHANGE-ME\n' | chpasswd -c YESCRYPT -P "$ROOT_MNT"
 
-# The kernel and U-Boot packages already populated $ROOT_MNT/boot while /boot
-# was just a plain directory on the rootfs. Save those files, mount the real
-# FAT boot partition on /boot, copy the payload across, then rerun the
-# u-boot-menu hook so extlinux paths and fdtdir match a separate /boot.
-rsync -aH "$ROOT_MNT/boot/" "$BOOT_SEED/"
-mount "${LOOP}p1" "$ROOT_MNT/boot"
-rsync -aH --delete "$BOOT_SEED/" "$ROOT_MNT/boot/"
-
-KVER=$(basename "$BOOT_SEED"/vmlinuz-*)
+# Guarantee DTB sync and final extlinux regeneration after all packages are in
+# place. This is safe even if the hook already ran during package installation.
+KVER=$(basename "$ROOT_MNT"/boot/vmlinuz-*)
 KVER=${KVER#vmlinuz-}
 chroot "$ROOT_MNT" /etc/kernel/postinst.d/zz-u-boot-menu "$KVER"
 
@@ -95,12 +91,18 @@ losetup -d "$LOOP"
 
 ## Notes
 
-- Do not mount the FAT partition on `$ROOT_MNT/boot` before bootstrap, because
-  `mmdebstrap` expects the target directory to be empty.
-- After bootstrap, rerun `/etc/kernel/postinst.d/zz-u-boot-menu <version>` with
-  the FAT partition mounted on `/boot`. That regenerates `extlinux.conf` with
-  `linux /vmlinuz-*`, `initrd /initrd.img-*`, and `fdtdir /dtbs/<version>/`
-  instead of rootfs-style `/boot/...` paths.
+- The FAT `/boot` partition is mounted on `$ROOT_MNT/boot` before bootstrap, so
+  `mmdebstrap` must be called with `--skip=check/empty`.
+- Keeping `/boot` mounted from the start lets package maintainer scripts see a
+  separate boot filesystem. `u-boot-update` therefore generates `linux
+  /vmlinuz-*` and `initrd /initrd.img-*` directly.
+- Rerun `/etc/kernel/postinst.d/zz-u-boot-menu <version>` once after
+  `mmdebstrap` completes. In the tested build this was still needed to force
+  DTB syncing into `/boot/dtbs/<version>/`, after which `fdtdir
+  /dtbs/<version>/` was generated correctly.
+- The overlay is still copied via `--setup-hook`, which runs early enough for
+  `/etc/kernel/cmdline`, `fstab`, and the APT repo configuration to influence
+  package installation.
 - `u-boot-sg2002-milkv-duo256m-distroboot` installs `fip.bin` directly into
   `/boot/`.
 - `u-boot-update` generates `/boot/extlinux/extlinux.conf`.
