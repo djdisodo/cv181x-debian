@@ -36,9 +36,9 @@ set -euo pipefail
 RECIPE_DIR=$PWD
 IMG=$PWD/sg2002-duo256m-debian.img
 ROOT_MNT=$PWD/mnt-root
-BOOT_MNT=$PWD/mnt-boot
+BOOT_SEED=$PWD/boot-seed
 
-install -d "$ROOT_MNT" "$BOOT_MNT"
+install -d "$ROOT_MNT" "$BOOT_SEED"
 
 # Make the vendored Sodo repo key visible to host-side apt during bootstrap.
 install -Dm0644 \
@@ -74,20 +74,33 @@ mmdebstrap \
 # Set the root password inside the foreign-arch rootfs without PAM.
 printf 'root:CHANGE-ME\n' | chpasswd -c YESCRYPT -P "$ROOT_MNT"
 
-mount "${LOOP}p1" "$BOOT_MNT"
-rsync -aH --delete "$ROOT_MNT/boot/" "$BOOT_MNT/"
+# The kernel and U-Boot packages already populated $ROOT_MNT/boot while /boot
+# was just a plain directory on the rootfs. Save those files, mount the real
+# FAT boot partition on /boot, copy the payload across, then rerun the
+# u-boot-menu hook so extlinux paths and fdtdir match a separate /boot.
+rsync -aH "$ROOT_MNT/boot/" "$BOOT_SEED/"
+mount "${LOOP}p1" "$ROOT_MNT/boot"
+rsync -aH --delete "$BOOT_SEED/" "$ROOT_MNT/boot/"
+
+KVER=$(basename "$BOOT_SEED"/vmlinuz-*)
+KVER=${KVER#vmlinuz-}
+chroot "$ROOT_MNT" /etc/kernel/postinst.d/zz-u-boot-menu "$KVER"
+
 sync
 
-umount "$BOOT_MNT"
+umount "$ROOT_MNT/boot"
 umount "$ROOT_MNT"
 losetup -d "$LOOP"
 ```
 
 ## Notes
 
-- `/boot` is copied to the FAT partition after `mmdebstrap` completes. Do not
-  mount the FAT partition on `$ROOT_MNT/boot` before bootstrap, because
+- Do not mount the FAT partition on `$ROOT_MNT/boot` before bootstrap, because
   `mmdebstrap` expects the target directory to be empty.
+- After bootstrap, rerun `/etc/kernel/postinst.d/zz-u-boot-menu <version>` with
+  the FAT partition mounted on `/boot`. That regenerates `extlinux.conf` with
+  `linux /vmlinuz-*`, `initrd /initrd.img-*`, and `fdtdir /dtbs/<version>/`
+  instead of rootfs-style `/boot/...` paths.
 - `u-boot-sg2002-milkv-duo256m-distroboot` installs `fip.bin` directly into
   `/boot/`.
 - `u-boot-update` generates `/boot/extlinux/extlinux.conf`.
