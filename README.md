@@ -19,7 +19,7 @@ installed:
 
 ```bash
 apt-get install -y \
-  mmdebstrap qemu-user-static binfmt-support \
+  mmdebstrap qemu-user-static binfmt-support wget \
   parted dosfstools btrfs-progs rsync
 ```
 
@@ -63,7 +63,7 @@ mmdebstrap \
   --skip=check/empty \
   --architectures=riscv64 \
   --variant=minbase \
-  --include='systemd-sysv,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
+  --include='systemd-sysv,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,linux-headers-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
   --setup-hook="sync-in $RECIPE_DIR/rootfs-overlay.distro-packager /" \
   --customize-hook='install -d "$1/boot/overlays"' \
   trixie \
@@ -71,6 +71,23 @@ mmdebstrap \
   'deb https://deb.debian.org/debian trixie main non-free-firmware' \
   'deb https://deb.debian.org/debian trixie-updates main non-free-firmware' \
   'deb https://security.debian.org/debian-security trixie-security main non-free-firmware'
+
+# Optional: add the external Radxa AIC8800 SDIO Wi-Fi DKMS package set used by
+# boards such as the LicheeRV Nano. This is not needed for the Milk-V Duo 256M.
+AIC_REL=5.0+git20260123.5f7be68d-4
+AIC_URL_BASE="https://github.com/radxa-pkg/aic8800/releases/download/5.0%2Bgit20260123.5f7be68d-4"
+AIC_DIR=$PWD/aic8800-debs
+install -d "$AIC_DIR"
+wget -O "$AIC_DIR/aic8800-firmware_${AIC_REL}_all.deb" \
+  "$AIC_URL_BASE/aic8800-firmware_${AIC_REL}_all.deb"
+wget -O "$AIC_DIR/aic8800-sdio-dkms_${AIC_REL}_all.deb" \
+  "$AIC_URL_BASE/aic8800-sdio-dkms_${AIC_REL}_all.deb"
+cp "$AIC_DIR"/*.deb "$ROOT_MNT/root/"
+chroot "$ROOT_MNT" apt-get update
+chroot "$ROOT_MNT" apt-get install -y \
+  /root/aic8800-firmware_${AIC_REL}_all.deb \
+  /root/aic8800-sdio-dkms_${AIC_REL}_all.deb
+rm -f "$ROOT_MNT"/root/aic8800-*.deb
 
 # Set the root password inside the foreign-arch rootfs without PAM.
 printf 'root:CHANGE-ME\n' | chpasswd -c YESCRYPT -P "$ROOT_MNT"
@@ -115,3 +132,9 @@ losetup -d "$LOOP"
   initramfs configuration, initramfs module list, and the kernel command line.
 - `libbpf1` is included so `systemd` can enable its optional cgroup-BPF
   helpers when the installed kernel exposes the required BPF/BTF support.
+- `linux-headers-cv181x-sodoport` is included so out-of-tree DKMS modules can
+  build against the packaged kernel flavour during image creation.
+- The optional Radxa AIC8800 step installs `aic8800-firmware` and
+  `aic8800-sdio-dkms` from the release assets at
+  `5.0+git20260123.5f7be68d-4`. The DKMS package itself only depends on
+  `dkms`, so the matching kernel headers still need to be present explicitly.
