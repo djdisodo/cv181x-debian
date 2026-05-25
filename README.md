@@ -6,8 +6,8 @@ scripts.
 
 The image layout is:
 
-- `p1`: FAT32, mounted as `/boot`
-- `p2`: btrfs, mounted as `/`
+- `p1`: FAT32, `128 MiB`, mounted as `/boot`
+- `p2`: btrfs, about `1.7 GiB`, mounted as `/`
 
 The overlay lives in `rootfs-overlay.distro-packager/` and is copied into the
 target rootfs during bootstrap.
@@ -36,6 +36,11 @@ set -euo pipefail
 RECIPE_DIR=$PWD
 IMG=$PWD/sg2002-duo256m-debian.img
 ROOT_MNT=$PWD/mnt-root
+BOOT_START_MIB=4
+BOOT_SIZE_MIB=128
+ROOT_SIZE_MIB=1741
+BOOT_END_MIB=$((BOOT_START_MIB + BOOT_SIZE_MIB))
+ROOT_END_MIB=$((BOOT_END_MIB + ROOT_SIZE_MIB))
 
 install -d "$ROOT_MNT"
 
@@ -44,11 +49,11 @@ install -Dm0644 \
   "$RECIPE_DIR/rootfs-overlay.distro-packager/usr/share/keyrings/sodo-repo.gpg" \
   /usr/share/keyrings/sodo-repo.gpg
 
-truncate -s 1536M "$IMG"
+truncate -s "$((ROOT_END_MIB * 1024 * 1024))" "$IMG"
 parted -s "$IMG" mklabel msdos
-parted -s "$IMG" mkpart primary fat32 4MiB 260MiB
+parted -s "$IMG" mkpart primary fat32 "${BOOT_START_MIB}MiB" "${BOOT_END_MIB}MiB"
 parted -s "$IMG" set 1 boot on
-parted -s "$IMG" mkpart primary btrfs 260MiB 100%
+parted -s "$IMG" mkpart primary btrfs "${BOOT_END_MIB}MiB" "${ROOT_END_MIB}MiB"
 
 LOOP=$(losetup --find --show --partscan "$IMG")
 mkfs.vfat -F 32 -n BOOT "${LOOP}p1"
@@ -110,6 +115,9 @@ losetup -d "$LOOP"
 
 - The FAT `/boot` partition is mounted on `$ROOT_MNT/boot` before bootstrap, so
   `mmdebstrap` must be called with `--skip=check/empty`.
+- The documented layout above creates a `128 MiB` FAT `/boot` partition and a
+  `1741 MiB` btrfs root partition, for a total image size of `1873 MiB`
+  starting from the `4 MiB` partition offset.
 - Keeping `/boot` mounted from the start lets package maintainer scripts see a
   separate boot filesystem. The kernel package therefore installs
   `/vmlinuz-*`, `/initrd.img-*`, and regenerates `/boot/extlinux/extlinux.conf`
