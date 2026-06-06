@@ -41,6 +41,7 @@ BOOT_SIZE_MIB=32
 ROOT_SIZE_MIB=1837
 BOOT_END_MIB=$((BOOT_START_MIB + BOOT_SIZE_MIB))
 ROOT_END_MIB=$((BOOT_END_MIB + ROOT_SIZE_MIB))
+IMG_SIZE_MIB=$((ROOT_END_MIB + 1))
 
 install -d "$ROOT_MNT"
 
@@ -49,14 +50,15 @@ install -Dm0644 \
   "$RECIPE_DIR/rootfs-overlay.distro-packager/usr/share/keyrings/sodo-repo.gpg" \
   /usr/share/keyrings/sodo-repo.gpg
 
-truncate -s "$((ROOT_END_MIB * 1024 * 1024))" "$IMG"
+truncate -s "$((IMG_SIZE_MIB * 1024 * 1024))" "$IMG"
 parted -s "$IMG" mklabel msdos
 parted -s "$IMG" mkpart primary fat32 "${BOOT_START_MIB}MiB" "${BOOT_END_MIB}MiB"
-parted -s "$IMG" set 1 boot on
+parted -s "$IMG" set 1 lba on
 parted -s "$IMG" mkpart primary btrfs "${BOOT_END_MIB}MiB" "${ROOT_END_MIB}MiB"
+parted -s "$IMG" set 2 boot on
 
 LOOP=$(losetup --find --show --partscan "$IMG")
-mkfs.vfat -F 32 -n FIRMWARE "${LOOP}p1"
+mkfs.vfat -n FIRMWARE "${LOOP}p1"
 mkfs.btrfs -L rootfs -f "${LOOP}p2"
 
 mount "${LOOP}p2" "$ROOT_MNT"
@@ -117,9 +119,16 @@ losetup -d "$LOOP"
   `$ROOT_MNT/boot/firmware` before bootstrap, so `mmdebstrap` must be called
   with `--skip=check/empty`.
 - The documented layout above creates a `32 MiB` FAT `/boot/firmware`
-  partition and a `1837 MiB` btrfs root partition, for a total image size of
-  `1873 MiB`
-  starting from the `4 MiB` partition offset.
+  partition and a `1837 MiB` btrfs root partition. The raw image file is
+  created with an extra `1 MiB` tail so `parted` can place the second
+  partition end cleanly at `1873 MiB`.
+- The small firmware partition should be created with plain `mkfs.vfat`
+  instead of forcing `-F 32`. On these boards the early firmware path is more
+  reliable with the default FAT type chosen for a `32 MiB` partition.
+- Mark the Btrfs root partition as the active DOS partition. U-Boot's default
+  `bootflow scan -b` path only considers bootable partitions, and
+  `/boot/extlinux/extlinux.conf` lives on partition 2, not on the firmware
+  partition.
 - Keeping `/boot/firmware` mounted from the start lets the U-Boot package
   postinst install `fip.bin` directly into the FAT firmware partition during
   bootstrap. The kernel package still installs `/boot/vmlinuz-*`,
