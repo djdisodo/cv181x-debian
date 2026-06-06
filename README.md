@@ -70,7 +70,7 @@ mmdebstrap \
   --skip=check/empty \
   --architectures=riscv64 \
   --variant=minbase \
-  --include='systemd-sysv,systemd-timesyncd,fake-hwclock,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,linux-headers-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
+  --include='systemd-sysv,systemd-timesyncd,fake-hwclock,openssh-server,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,linux-headers-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
   --setup-hook="sync-in $RECIPE_DIR/rootfs-overlay.distro-packager /" \
   --customize-hook='install -d "$1/boot/overlays"' \
   trixie \
@@ -154,7 +154,8 @@ losetup -d "$LOOP"
 - Use `chpasswd -c YESCRYPT -P "$ROOT_MNT"` for the root password step. That
   avoids PAM and works reliably for a riscv64 rootfs prepared on an amd64 host.
 - The overlay adds the Sodo APT repo, the repo signing key, `fstab`,
-  initramfs configuration, initramfs module list, and the kernel command line.
+  initramfs configuration, initramfs module list, the kernel command line,
+  and a default hostname of `localhost`.
 - `libbpf1` is included so `systemd` can enable its optional cgroup-BPF
   helpers when the installed kernel exposes the required BPF/BTF support.
 - `linux-headers-cv181x-sodoport` is included so out-of-tree DKMS modules can
@@ -162,6 +163,8 @@ losetup -d "$LOOP"
 - `systemd-timesyncd` is included so the system can automatically sync time
   once networking is up, and `fake-hwclock` keeps a coarse last-known time
   across reboots on boards without a battery-backed RTC.
+- `openssh-server` is included in the base image so the board is reachable over
+  SSH as soon as networking is configured.
 - The optional Radxa AIC8800 step installs `aic8800-firmware` and
   `aic8800-sdio-dkms` from the release assets at
   `5.0+git20260123.5f7be68d-4`. The DKMS package itself only depends on
