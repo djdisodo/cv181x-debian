@@ -6,8 +6,8 @@ scripts.
 
 The image layout is:
 
-- `p1`: FAT32, `128 MiB`, mounted as `/boot`
-- `p2`: btrfs, about `1.7 GiB`, mounted as `/`
+- `p1`: FAT32, `32 MiB`, mounted as `/boot/firmware`
+- `p2`: btrfs, about `1.8 GiB`, mounted as `/`
 
 The overlay lives in `rootfs-overlay.distro-packager/` and is copied into the
 target rootfs during bootstrap.
@@ -37,8 +37,8 @@ RECIPE_DIR=$PWD
 IMG=$PWD/sg2002-duo256m-debian.img
 ROOT_MNT=$PWD/mnt-root
 BOOT_START_MIB=4
-BOOT_SIZE_MIB=128
-ROOT_SIZE_MIB=1741
+BOOT_SIZE_MIB=32
+ROOT_SIZE_MIB=1837
 BOOT_END_MIB=$((BOOT_START_MIB + BOOT_SIZE_MIB))
 ROOT_END_MIB=$((BOOT_END_MIB + ROOT_SIZE_MIB))
 
@@ -56,19 +56,19 @@ parted -s "$IMG" set 1 boot on
 parted -s "$IMG" mkpart primary btrfs "${BOOT_END_MIB}MiB" "${ROOT_END_MIB}MiB"
 
 LOOP=$(losetup --find --show --partscan "$IMG")
-mkfs.vfat -F 32 -n BOOT "${LOOP}p1"
+mkfs.vfat -F 32 -n FIRMWARE "${LOOP}p1"
 mkfs.btrfs -L rootfs -f "${LOOP}p2"
 
 mount "${LOOP}p2" "$ROOT_MNT"
-install -d "$ROOT_MNT/boot"
-mount "${LOOP}p1" "$ROOT_MNT/boot"
+install -d "$ROOT_MNT/boot/firmware"
+mount "${LOOP}p1" "$ROOT_MNT/boot/firmware"
 
 mmdebstrap \
   --mode=root \
   --skip=check/empty \
   --architectures=riscv64 \
   --variant=minbase \
-  --include='systemd-sysv,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,linux-headers-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
+  --include='systemd-sysv,systemd-timesyncd,fake-hwclock,network-manager,netbase,kmod,btrfs-progs,ca-certificates,libbpf1,firmware-realtek,linux-image-cv181x-sodoport,linux-headers-cv181x-sodoport,u-boot-sg2002-milkv-duo256m-distroboot' \
   --setup-hook="sync-in $RECIPE_DIR/rootfs-overlay.distro-packager /" \
   --customize-hook='install -d "$1/boot/overlays"' \
   trixie \
@@ -97,43 +97,51 @@ rm -f "$ROOT_MNT"/root/aic8800-*.deb
 # Set the root password inside the foreign-arch rootfs without PAM.
 printf 'root:CHANGE-ME\n' | chpasswd -c YESCRYPT -P "$ROOT_MNT"
 
-# Run the normal kernel postinst hook one more time after bootstrap so DTBs are
-# definitely synced into the mounted FAT /boot and extlinux is regenerated from
-# the final installed state.
+# Run the normal kernel postinst hook one more time after bootstrap so
+# extlinux is regenerated from the final installed state after all packages and
+# overlays are in place.
 KVER=$(basename "$ROOT_MNT"/boot/vmlinuz-*)
 KVER=${KVER#vmlinuz-}
 chroot "$ROOT_MNT" /etc/kernel/postinst.d/zz-u-boot-menu "$KVER"
 
 sync
 
-umount "$ROOT_MNT/boot"
+umount "$ROOT_MNT/boot/firmware"
 umount "$ROOT_MNT"
 losetup -d "$LOOP"
 ```
 
 ## Notes
 
-- The FAT `/boot` partition is mounted on `$ROOT_MNT/boot` before bootstrap, so
-  `mmdebstrap` must be called with `--skip=check/empty`.
-- The documented layout above creates a `128 MiB` FAT `/boot` partition and a
-  `1741 MiB` btrfs root partition, for a total image size of `1873 MiB`
+- The FAT `/boot/firmware` partition is mounted on
+  `$ROOT_MNT/boot/firmware` before bootstrap, so `mmdebstrap` must be called
+  with `--skip=check/empty`.
+- The documented layout above creates a `32 MiB` FAT `/boot/firmware`
+  partition and a `1837 MiB` btrfs root partition, for a total image size of
+  `1873 MiB`
   starting from the `4 MiB` partition offset.
-- Keeping `/boot` mounted from the start lets package maintainer scripts see a
-  separate boot filesystem. The kernel package therefore installs
-  `/vmlinuz-*`, `/initrd.img-*`, and regenerates `/boot/extlinux/extlinux.conf`
-  through the normal Debian `u-boot-menu` hooks.
+- Keeping `/boot/firmware` mounted from the start lets the U-Boot package
+  postinst install `fip.bin` directly into the FAT firmware partition during
+  bootstrap. The kernel package still installs `/boot/vmlinuz-*`,
+  `/boot/initrd.img-*`, and regenerates `/boot/extlinux/extlinux.conf` on the
+  Btrfs root through the normal Debian `u-boot-menu` hooks.
 - Rerun `/etc/kernel/postinst.d/zz-u-boot-menu <version>` once after
   `mmdebstrap` completes. In the tested build this final explicit pass was
-  still useful to force DTB syncing into `/boot/dtbs/<version>/`, after which
-  `fdtdir /dtbs/<version>/` was generated correctly.
+  still useful to refresh `extlinux.conf` after all package postinst scripts
+  had run.
 - The overlay is still copied via `--setup-hook`, which runs early enough for
   `/etc/kernel/cmdline`, `fstab`, and the APT repo configuration to influence
   package installation.
-- `u-boot-sg2002-milkv-duo256m-distroboot` installs `fip.bin` directly into
-  `/boot/`.
+- `u-boot-sg2002-milkv-duo256m-distroboot` stages `fip.bin` under
+  `/usr/lib/u-boot/sg2002-milkv-duo256m/` and its postinst copies it to
+  `/boot/firmware/fip.bin`.
 - `linux-image-cv181x-sodoport` generates `/boot/initrd.img-*` and
   `/boot/vmlinuz-*` through the normal Debian kernel hooks, and those hooks
   also refresh `extlinux.conf`.
+- The packaged SG2002 U-Boot build enables Btrfs support so firmware can read
+  `/boot/extlinux/extlinux.conf`, kernels, DTBs, and overlays from the Btrfs
+  root partition while keeping only `fip.bin` on the small FAT firmware
+  partition.
 - Use `chpasswd -c YESCRYPT -P "$ROOT_MNT"` for the root password step. That
   avoids PAM and works reliably for a riscv64 rootfs prepared on an amd64 host.
 - The overlay adds the Sodo APT repo, the repo signing key, `fstab`,
@@ -142,6 +150,9 @@ losetup -d "$LOOP"
   helpers when the installed kernel exposes the required BPF/BTF support.
 - `linux-headers-cv181x-sodoport` is included so out-of-tree DKMS modules can
   build against the packaged kernel flavour during image creation.
+- `systemd-timesyncd` is included so the system can automatically sync time
+  once networking is up, and `fake-hwclock` keeps a coarse last-known time
+  across reboots on boards without a battery-backed RTC.
 - The optional Radxa AIC8800 step installs `aic8800-firmware` and
   `aic8800-sdio-dkms` from the release assets at
   `5.0+git20260123.5f7be68d-4`. The DKMS package itself only depends on
